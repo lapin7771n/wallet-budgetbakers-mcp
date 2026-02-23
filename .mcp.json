@@ -1,4 +1,4 @@
-add {
+{
   "mcpServers": {
     "wallet-bb": {
       "command": "uv",
