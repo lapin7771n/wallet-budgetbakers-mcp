@@ -1,0 +1,11 @@
+add {
+  "mcpServers": {
+    "wallet-bb": {
+      "command": "uv",
+      "args": ["--directory", ".", "run", "server.py"],
+      "env": {
+        "WALLET_API_TOKEN": "${WALLET_API_TOKEN}"
+      }
+    }
+  }
+}
