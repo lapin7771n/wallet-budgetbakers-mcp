@@ -1,8 +1,9 @@
+.venv/
+.git/
+.claude/
 __pycache__/
 *.pyc
-*.pyo
-.venv/
 .env
 dist/
 *.egg-info/
-.claude/
+README.md

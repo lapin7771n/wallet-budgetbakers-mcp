@@ -53,6 +53,46 @@ claude
 4. Save the file and **restart Claude Desktop**
 5. You should see an MCP tools indicator (hammer icon) in the chat input area
 
+### 4. Claude.ai Connector (remote)
+
+The server can be deployed to Google Cloud Run and used as a remote MCP connector:
+
+1. Go to **claude.ai** → Profile → **Settings** → **Integrations**
+2. Click **Add custom integration**
+3. Enter the server URL: `https://<your-cloud-run-service-url>/mcp`
+4. No authentication required — the Wallet API token is stored server-side
+
+## Cloud Run Deployment
+
+The server supports both local (stdio) and remote (HTTP) transport. Cloud Run deployment is automated via GitHub Actions.
+
+### How it works
+
+- Push to `main` triggers `.github/workflows/deploy.yml`
+- Cloud Build builds the Docker image from `Dockerfile`
+- Cloud Run deploys the new revision to `europe-central2`
+- Auth is handled via Workload Identity Federation (keyless)
+
+### Manual deployment
+
+```bash
+gcloud run deploy wallet-bb-mcp \
+  --source . \
+  --region europe-central2 \
+  --project wallet-bb-mcp \
+  --allow-unauthenticated \
+  --set-env-vars "WALLET_API_TOKEN=your_token" \
+  --port 8080
+```
+
+### Local HTTP mode
+
+```bash
+MCP_TRANSPORT=streamable-http WALLET_API_TOKEN=your_token uv run server.py
+# Health check: curl http://localhost:8080/health
+# MCP endpoint: http://localhost:8080/mcp
+```
+
 ## Available Tools
 
 | Tool | Description |

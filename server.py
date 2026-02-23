@@ -21,6 +21,8 @@ from dataclasses import dataclass
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 # ── Config ───────────────────────────────────────────────────────────────
 BASE_URL = "https://rest.budgetbakers.com/wallet/v1/api"
@@ -71,7 +73,19 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
 
 # ── MCP Server ───────────────────────────────────────────────────────────
-mcp = FastMCP("wallet-bb", instructions=INSTRUCTIONS, lifespan=app_lifespan)
+mcp = FastMCP(
+    "wallet-bb",
+    instructions=INSTRUCTIONS,
+    lifespan=app_lifespan,
+    host="0.0.0.0",
+    port=int(os.environ.get("PORT", 8080)),
+    stateless_http=True,
+)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
 
 
 # ── HTTP helper ──────────────────────────────────────────────────────────
@@ -461,4 +475,5 @@ async def get_api_usage(ctx: Context, period: str = "30days") -> str:
 
 # ── Entry point ──────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    mcp.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    mcp.run(transport=transport)  # type: ignore[arg-type]
