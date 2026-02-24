@@ -13,19 +13,40 @@ Setup:
   3. Run: uv run server.py
 """
 
+import html
 import json
 import os
+import secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizationCode,
+    AuthorizationParams,
+    RefreshToken,
+    construct_redirect_uri,
+)
+from mcp.server.auth.settings import (
+    AuthSettings,
+    ClientRegistrationOptions,
+    RevocationOptions,
+)
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from pydantic import AnyHttpUrl
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 # ── Config ───────────────────────────────────────────────────────────────
 BASE_URL = "https://rest.budgetbakers.com/wallet/v1/api"
+PORT = int(os.environ.get("PORT", 8080))
+MCP_AUTH_PASSWORD = os.environ.get("MCP_AUTH_PASSWORD", "")
+MCP_BASE_URL = os.environ.get("MCP_BASE_URL", "").rstrip("/")
 
 INSTRUCTIONS = """\
 Wallet by BudgetBakers — read-only access to personal financial data.
@@ -59,6 +80,155 @@ Wallet by BudgetBakers — read-only access to personal financial data.
 """
 
 
+# ── OAuth (single-user, password-gated) ──────────────────────────────────
+# In-memory stores — lost on restart, Claude just re-authenticates.
+_clients: dict[str, OAuthClientInformationFull] = {}
+_auth_codes: dict[str, AuthorizationCode] = {}
+_access_tokens: dict[str, AccessToken] = {}
+_refresh_tokens: dict[str, RefreshToken] = {}
+_pending_auth: dict[str, dict[str, Any]] = {}
+
+_LOGIN_HTML = """\
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Wallet BB — Authorize</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{ font-family: system-ui, sans-serif; max-width: 380px; margin: 80px auto; padding: 0 20px; }}
+    h1 {{ font-size: 1.4em; }}
+    input[type=password] {{ width: 100%; padding: 8px; box-sizing: border-box; margin: 8px 0 12px; }}
+    button {{ padding: 8px 24px; cursor: pointer; }}
+    .error {{ color: #c00; margin-bottom: 12px; }}
+  </style>
+</head>
+<body>
+  <h1>Wallet BB — Authorize</h1>
+  <p>Enter your password to grant Claude access to your financial data.</p>
+  {error}
+  <form method="post" action="/login?session={session}">
+    <label for="pwd">Password</label>
+    <input type="password" name="password" id="pwd" autofocus required>
+    <button type="submit">Authorize</button>
+  </form>
+</body>
+</html>"""
+
+
+class SingleUserAuthProvider:
+    """OAuth 2.1 authorization server for a single-user MCP deployment."""
+
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        return _clients.get(client_id)
+
+    async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        if client_info.client_id:
+            _clients[client_info.client_id] = client_info
+
+    async def authorize(
+        self, client: OAuthClientInformationFull, params: AuthorizationParams
+    ) -> str:
+        session_id = secrets.token_urlsafe(32)
+        _pending_auth[session_id] = {
+            "client_id": client.client_id,
+            "params": params,
+            "expires_at": time.time() + 300,
+        }
+        return f"{MCP_BASE_URL}/login?session={session_id}"
+
+    async def load_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: str
+    ) -> AuthorizationCode | None:
+        code = _auth_codes.get(authorization_code)
+        if code and code.client_id == client.client_id and code.expires_at > time.time():
+            return code
+        return None
+
+    async def exchange_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
+    ) -> OAuthToken:
+        _auth_codes.pop(authorization_code.code, None)
+
+        access_tok = secrets.token_urlsafe(32)
+        refresh_tok = secrets.token_urlsafe(32)
+        scopes = authorization_code.scopes
+        expires_in = 3600
+
+        _access_tokens[access_tok] = AccessToken(
+            token=access_tok,
+            client_id=client.client_id or "",
+            scopes=scopes,
+            expires_at=int(time.time()) + expires_in,
+            resource=authorization_code.resource,
+        )
+        _refresh_tokens[refresh_tok] = RefreshToken(
+            token=refresh_tok,
+            client_id=client.client_id or "",
+            scopes=scopes,
+            expires_at=int(time.time()) + 30 * 24 * 3600,
+        )
+        return OAuthToken(
+            access_token=access_tok,
+            token_type="Bearer",
+            expires_in=expires_in,
+            refresh_token=refresh_tok,
+            scope=" ".join(scopes),
+        )
+
+    async def load_refresh_token(
+        self, client: OAuthClientInformationFull, refresh_token: str
+    ) -> RefreshToken | None:
+        tok = _refresh_tokens.get(refresh_token)
+        if tok and tok.client_id == client.client_id:
+            if tok.expires_at is None or tok.expires_at > time.time():
+                return tok
+        return None
+
+    async def exchange_refresh_token(
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: RefreshToken,
+        scopes: list[str],
+    ) -> OAuthToken:
+        _refresh_tokens.pop(refresh_token.token, None)
+
+        access_tok = secrets.token_urlsafe(32)
+        new_refresh_tok = secrets.token_urlsafe(32)
+        expires_in = 3600
+
+        _access_tokens[access_tok] = AccessToken(
+            token=access_tok,
+            client_id=client.client_id or "",
+            scopes=scopes,
+            expires_at=int(time.time()) + expires_in,
+        )
+        _refresh_tokens[new_refresh_tok] = RefreshToken(
+            token=new_refresh_tok,
+            client_id=client.client_id or "",
+            scopes=scopes,
+            expires_at=int(time.time()) + 30 * 24 * 3600,
+        )
+        return OAuthToken(
+            access_token=access_tok,
+            token_type="Bearer",
+            expires_in=expires_in,
+            refresh_token=new_refresh_tok,
+            scope=" ".join(scopes),
+        )
+
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        tok = _access_tokens.get(token)
+        if tok and (tok.expires_at is None or tok.expires_at > int(time.time())):
+            return tok
+        return None
+
+    async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
+        if isinstance(token, AccessToken):
+            _access_tokens.pop(token.token, None)
+        elif isinstance(token, RefreshToken):
+            _refresh_tokens.pop(token.token, None)
+
+
 # ── Lifespan (shared HTTP client) ────────────────────────────────────────
 @dataclass
 class AppContext:
@@ -82,19 +252,92 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 
 
 # ── MCP Server ───────────────────────────────────────────────────────────
+_auth_kwargs: dict[str, object] = {}
+if MCP_AUTH_PASSWORD:
+    if not MCP_BASE_URL:
+        raise RuntimeError(
+            "MCP_BASE_URL is required when MCP_AUTH_PASSWORD is set "
+            "(e.g. https://wallet-bb-mcp-xxx.run.app)"
+        )
+    _auth_kwargs = {
+        "auth_server_provider": SingleUserAuthProvider(),
+        "auth": AuthSettings(
+            issuer_url=AnyHttpUrl(MCP_BASE_URL),
+            resource_server_url=AnyHttpUrl(MCP_BASE_URL),
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+                valid_scopes=["read"],
+                default_scopes=["read"],
+            ),
+            revocation_options=RevocationOptions(enabled=True),
+            required_scopes=["read"],
+        ),
+    }
+
 mcp = FastMCP(
     "wallet-bb",
     instructions=INSTRUCTIONS,
     lifespan=app_lifespan,
     host="0.0.0.0",
-    port=int(os.environ.get("PORT", 8080)),
+    port=PORT,
     stateless_http=True,
+    **_auth_kwargs,  # type: ignore[arg-type]
 )
 
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+if MCP_AUTH_PASSWORD:
+
+    @mcp.custom_route("/login", methods=["GET", "POST"])
+    async def login_page(request: Request) -> Response:
+        session = request.query_params.get("session", "")
+
+        if request.method == "GET":
+            if session not in _pending_auth:
+                return HTMLResponse("Invalid or expired session.", status_code=400)
+            return HTMLResponse(
+                _LOGIN_HTML.format(session=html.escape(session), error="")
+            )
+
+        # POST — validate password
+        form = await request.form()
+        password = form.get("password", "")
+
+        pending = _pending_auth.get(session)
+        if not pending or time.time() > float(pending["expires_at"]):
+            return HTMLResponse("Session expired. Please try again.", status_code=400)
+
+        if password != MCP_AUTH_PASSWORD:
+            return HTMLResponse(
+                _LOGIN_HTML.format(
+                    session=html.escape(session),
+                    error='<p class="error">Invalid password.</p>',
+                )
+            )
+
+        _pending_auth.pop(session, None)
+        params: AuthorizationParams = pending["params"]  # type: ignore[assignment]
+
+        code = secrets.token_urlsafe(32)
+        _auth_codes[code] = AuthorizationCode(
+            code=code,
+            scopes=params.scopes or [],
+            expires_at=time.time() + 60,
+            client_id=str(pending["client_id"]),
+            code_challenge=params.code_challenge,
+            redirect_uri=params.redirect_uri,
+            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+            resource=params.resource,
+        )
+
+        redirect_url = construct_redirect_uri(
+            str(params.redirect_uri), code=code, state=params.state
+        )
+        return RedirectResponse(redirect_url, status_code=302)
 
 
 # ── HTTP helper ──────────────────────────────────────────────────────────

@@ -31,4 +31,6 @@ jobs:
             --source . \
             --region europe-central2 \
             --project wallet-bb-mcp \
+            --update-secrets=WALLET_API_TOKEN=wallet-api-token:latest,MCP_AUTH_PASSWORD=mcp-auth-password:latest \
+            --set-env-vars=MCP_BASE_URL=https://wallet-bb-mcp-306816649298.europe-central2.run.app \
             --quiet

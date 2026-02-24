@@ -7,4 +7,4 @@ dist/
 *.egg-info/
 .claude/
 plans/
-investigation/
+investigations/
