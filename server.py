@@ -115,7 +115,7 @@ async def _fetch(
     try:
         resp = await client.get(path, params=clean)
         resp.raise_for_status()
-        return json.dumps(resp.json(), ensure_ascii=False, indent=2, default=str)
+        return json.dumps(resp.json(), ensure_ascii=False, default=str)
     except httpx.HTTPStatusError as e:
         body = e.response.text
         if e.response.status_code == 429:
@@ -186,7 +186,7 @@ async def get_records(
     ctx: Context,
     account_id: str,
     record_date: str | None = None,
-    limit: int = 100,
+    limit: int = 30,
     offset: int = 0,
     category_id: str | None = None,
     label_id: str | None = None,
@@ -219,7 +219,7 @@ async def get_records(
         ctx: MCP context
         account_id: Required. Account ID (use get_accounts to find IDs)
         record_date: Date range filter with prefix (e.g. "gte.2025-01-01")
-        limit: Items per page (1-100, default 100)
+        limit: Items per page (1-100, default 30)
         offset: Items to skip for pagination
         category_id: Filter by category ID
         label_id: Filter by label ID
@@ -267,7 +267,7 @@ async def get_records_by_id(ctx: Context, record_ids: str) -> str:
 @mcp.tool()
 async def get_categories(
     ctx: Context,
-    limit: int = 100,
+    limit: int = 50,
     offset: int = 0,
     category_id: str | None = None,
     name: str | None = None,
@@ -282,7 +282,7 @@ async def get_categories(
 
     Args:
         ctx: MCP context
-        limit: Items per page (1-100, default 100)
+        limit: Items per page (1-100, default 50)
         offset: Items to skip
         category_id: Filter by exact category ID
         name: Filter by name (use prefix: contains-i.food)
@@ -372,7 +372,7 @@ async def get_goals(
 @mcp.tool()
 async def get_labels(
     ctx: Context,
-    limit: int = 100,
+    limit: int = 50,
     offset: int = 0,
     label_id: str | None = None,
     name: str | None = None,
@@ -384,7 +384,7 @@ async def get_labels(
 
     Args:
         ctx: MCP context
-        limit: Items per page (1-100, default 100)
+        limit: Items per page (1-100, default 50)
         offset: Items to skip
         label_id: Filter by exact label ID
         name: Filter by label name (use prefix: eq., contains., contains-i.)
