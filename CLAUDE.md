@@ -38,6 +38,10 @@ API base: `https://rest.budgetbakers.com/wallet/v1/api`
 - Pagination: `limit` (1-100) + `offset`
 - All tools return `str` (JSON)
 
+**Record types:** `recordType` is `income` or `expense` only. Transfers are identified by `transferId`/`transferAccountId` fields in the response, not by `recordType`.
+
+**Date constraints (records):** Max 370-day range per query. Default (no filter): last 3 months.
+
 **Rate limit:** 500 requests/hour. The server returns structured JSON error on 429 with `retry_after`.
 
 ## Dependencies

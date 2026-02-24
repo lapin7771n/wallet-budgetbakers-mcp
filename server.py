@@ -45,6 +45,15 @@ Wallet by BudgetBakers — read-only access to personal financial data.
 - Less/equal: lte.value
 - Combine: gte.2025-01-01,lte.2025-01-31
 
+## Record types and transfers
+- recordType is either "income" or "expense"
+- Transfers are identified by the presence of transferId and transferAccountId fields,
+  not by recordType. A transfer appears as two linked records (one per account).
+
+## Date constraints for records
+- Max date range: 370 days per query
+- Default (no date filter): last 3 months
+
 ## Rate limits
 500 requests per hour. Use get_api_usage() to check remaining quota.
 """
@@ -194,7 +203,7 @@ async def get_records(
     Get financial records (transactions) for a specific account.
 
     IMPORTANT: account_id is required. Use get_accounts() first to find it.
-    Max date range is 370 days. If no date filter, returns last 30 days.
+    Max date range is 370 days. If no date filter, returns last 3 months.
 
     Date filter examples:
       - "gte.2025-01-01" — from Jan 1, 2025
@@ -218,7 +227,9 @@ async def get_records(
         payee: Filter expenses by payee (use prefix: contains-i.amazon)
         payer: Filter income by payer
         amount: Filter by amount (use prefix: gte.100,lte.500)
-        record_type: Filter by type: income_expense, transfer, or refund
+        record_type: Filter by type: income or expense. Transfers are not a
+            separate type — they are identified by transferId/transferAccountId
+            fields in the response
         sort_by: Sort field and direction (e.g. "recordDate,asc" or "amount,desc")
         created_at: Filter by creation date (e.g. "gte.2025-01-01")
         updated_at: Filter by last update date (e.g. "gte.2025-01-01")
